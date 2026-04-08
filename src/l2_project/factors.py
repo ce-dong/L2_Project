@@ -157,28 +157,16 @@ def voi_expr(level: int = 1) -> pl.Expr:
     prev_bid_volume = pl.col(_prev_col(f"bid_volume_{level}"))
     prev_ask_volume = pl.col(_prev_col(f"ask_volume_{level}"))
 
-    bid_component = (
-        pl.when(bid_price > prev_bid_price)
-        .then(bid_volume)
-        .when(bid_price == prev_bid_price)
-        .then(bid_volume - prev_bid_volume)
-        .otherwise(-prev_bid_volume)
-    )
-    ask_component = (
-        pl.when(ask_price < prev_ask_price)
-        .then(ask_volume)
-        .when(ask_price == prev_ask_price)
-        .then(ask_volume - prev_ask_volume)
-        .otherwise(-prev_ask_volume)
-    )
     return (
         pl.when(
             prev_bid_price.is_not_null()
             & prev_ask_price.is_not_null()
             & _best_quote_is_valid(level)
             & _best_quote_is_valid(level, prefix="__prev_")
+            & (bid_price == prev_bid_price)
+            & (ask_price == prev_ask_price)
         )
-        .then(bid_component - ask_component)
+        .then((bid_volume - prev_bid_volume) - (ask_volume - prev_ask_volume))
         .otherwise(None)
         .alias(f"voi_{level}")
     )

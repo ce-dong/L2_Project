@@ -13,6 +13,7 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from l2_project.eval import build_rank_ic_summary, build_rank_ic_timeseries
 from l2_project.factors import SnapshotSchemaError, compute_snapshot_factors_to_parquet
 from l2_project.labels import compute_forward_returns_to_parquet
 
@@ -96,6 +97,8 @@ class PipelineSmokeTest(unittest.TestCase):
             self.assertLessEqual(first_row["micro_price_1"], first_row["ask_price_1"])
             self.assertAlmostEqual(second_row["voi_1"], 40.0, places=6)
             self.assertAlmostEqual(second_row["ofi_1"], 40.0, places=6)
+            self.assertIsNone(result.row(2, named=True)["voi_1"])
+            self.assertAlmostEqual(result.row(2, named=True)["ofi_1"], 220.0, places=6)
             self.assertAlmostEqual(first_row["fwd_ret_3000ms"], 0.0, places=12)
             self.assertGreater(second_row["fwd_ret_3000ms"], 0.0)
             self.assertIsNone(result.row(2, named=True)["fwd_ret_3000ms"])
@@ -113,6 +116,64 @@ class PipelineSmokeTest(unittest.TestCase):
                     temp_root / "invalid_factor.parquet",
                     force=True,
                 )
+
+    def test_eval_summary_ignores_invalid_groups(self) -> None:
+        panel = pl.DataFrame(
+            {
+                "trading_day": [20251103] * 9,
+                "event_time": [
+                    91400000,
+                    91400000,
+                    91400000,
+                    93000000,
+                    93000000,
+                    93000000,
+                    93003000,
+                    93003000,
+                    93003000,
+                ],
+                "symbol": [
+                    "000001",
+                    "000002",
+                    "000003",
+                    "000001",
+                    "000002",
+                    "000003",
+                    "000001",
+                    "000002",
+                    "000003",
+                ],
+                "source_month": ["202511"] * 9,
+                "micro_price_1": [1.0, 2.0, 3.0, 1.0, 2.0, 3.0, 5.0, 5.0, 5.0],
+                "fwd_ret_3000ms": [1.0, 2.0, 3.0, 1.0, 2.0, 3.0, 1.0, 2.0, 3.0],
+            }
+        ).lazy()
+
+        timeseries = build_rank_ic_timeseries(
+            panel,
+            factor_columns=["micro_price_1"],
+            label_columns=["fwd_ret_3000ms"],
+            min_cross_section=3,
+        ).collect()
+        summary = build_rank_ic_summary(
+            timeseries.lazy(),
+            factor_columns=["micro_price_1"],
+            label_columns=["fwd_ret_3000ms"],
+        ).collect()
+
+        self.assertEqual(timeseries.shape[0], 2)
+        self.assertEqual(timeseries["rank_ic__micro_price_1__fwd_ret_3000ms"].null_count(), 1)
+        self.assertEqual(
+            timeseries["invalid_reason__micro_price_1__fwd_ret_3000ms"].to_list(),
+            [None, "factor_constant"],
+        )
+
+        row = summary.row(0, named=True)
+        self.assertEqual(row["groups_total"], 2)
+        self.assertEqual(row["groups_valid"], 1)
+        self.assertEqual(row["groups_factor_constant"], 1)
+        self.assertAlmostEqual(row["valid_ratio"], 0.5, places=12)
+        self.assertAlmostEqual(row["rank_ic_mean"], 1.0, places=12)
 
 
 if __name__ == "__main__":

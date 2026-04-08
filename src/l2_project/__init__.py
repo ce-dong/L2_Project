@@ -1,5 +1,5 @@
 """Core package for the L2 microstructure project."""
 
-from . import factors, ingest, labels
+from . import eval, factors, ingest, labels, panel
 
-__all__ = ["factors", "ingest", "labels"]
+__all__ = ["eval", "factors", "ingest", "labels", "panel"]
