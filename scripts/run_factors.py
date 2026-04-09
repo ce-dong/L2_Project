@@ -10,11 +10,13 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from l2_project.factors import compute_snapshot_factors_to_parquet
+from l2_project.trade_factors import compute_snapshot_trade_factors_to_parquet
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run snapshot factor calculations.")
+    parser = argparse.ArgumentParser(
+        description="Run snapshot factors and merge trade-imbalance factors."
+    )
     parser.add_argument(
         "--input-root",
         type=Path,
@@ -26,6 +28,12 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=PROJECT_ROOT / "data" / "factors" / "snapshot",
         help="Output parquet root for factor-enriched snapshot files.",
+    )
+    parser.add_argument(
+        "--trade-root",
+        type=Path,
+        default=PROJECT_ROOT / "data" / "parquet" / "trade",
+        help="Input parquet root for normalized trade files matched by month and symbol.",
     )
     parser.add_argument(
         "--force",
@@ -45,9 +53,15 @@ def main() -> None:
     for source_path in parquet_files:
         relative_path = source_path.relative_to(args.input_root)
         output_path = args.output_root / relative_path
+        trade_path = args.trade_root / relative_path
+        if not trade_path.exists():
+            raise FileNotFoundError(
+                f"matching trade parquet does not exist for {source_path}: {trade_path}"
+            )
         outputs.append(
-            compute_snapshot_factors_to_parquet(
+            compute_snapshot_trade_factors_to_parquet(
                 source_path,
+                trade_path,
                 output_path,
                 force=args.force,
             )

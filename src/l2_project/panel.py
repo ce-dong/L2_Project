@@ -9,7 +9,15 @@ from .factors import SnapshotSchemaError
 
 PANEL_INDEX_COLUMNS = ["trading_day", "event_time", "symbol"]
 DEFAULT_PANEL_BASE_COLUMNS: tuple[str, ...] = ("source_month",)
-FACTOR_PREFIXES = ("micro_price_", "oir_", "voi_", "ofi_")
+FACTOR_PREFIXES = (
+    "micro_price_",
+    "relative_spread_",
+    "oir_",
+    "book_slope_",
+    "trade_imbalance_",
+    "voi_",
+    "ofi_",
+)
 LABEL_PREFIXES = ("fwd_ret_",)
 
 

@@ -37,8 +37,11 @@ The code is split so each layer has one job:
 Current implemented factors:
 
 - `micro_price_1`
+- `relative_spread_1`
 - `oir_1`
 - `oir_5`
+- `book_slope_5`
+- `trade_imbalance_3s`
 - `voi_1`
 - `ofi_1`
 
@@ -111,6 +114,15 @@ Factor effectiveness in the current run:
 - `micro_price_1` is negative in this sample
 
 One important point: the biggest improvement after rebuilding the universe was not factor mean IC itself. It was cross-sectional validity. In the earlier mixed-quality universe, many timestamps failed the minimum cross-section requirement. In the current 40-stock universe, most factors are computable at virtually every timestamp.
+
+The latest codebase also includes two additional snapshot factors for the next evaluation round:
+
+- `relative_spread_1`
+- `book_slope_5`
+
+The trade factor pipeline also supports:
+
+- `trade_imbalance_3s`
 
 ## Reproducibility
 

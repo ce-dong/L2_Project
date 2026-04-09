@@ -32,11 +32,15 @@ def _is_numeric_dtype(dtype: pl.DataType) -> bool:
 def required_snapshot_columns(
     *,
     micro_price_levels: Sequence[int] = (1,),
+    relative_spread_levels: Sequence[int] = (1,),
     oir_depths: Sequence[int] = (1, 5),
+    book_slope_depths: Sequence[int] = (5,),
     flow_levels: Sequence[int] = (1,),
 ) -> list[str]:
     required = set(BOOK_SORT)
-    max_depth = max([1, *micro_price_levels, *oir_depths, *flow_levels])
+    max_depth = max(
+        [1, *micro_price_levels, *relative_spread_levels, *oir_depths, *book_slope_depths, *flow_levels]
+    )
     for level in range(1, max_depth + 1):
         required.update(
             {
@@ -53,12 +57,16 @@ def validate_snapshot_schema(
     schema: Mapping[str, pl.DataType],
     *,
     micro_price_levels: Sequence[int] = (1,),
+    relative_spread_levels: Sequence[int] = (1,),
     oir_depths: Sequence[int] = (1, 5),
+    book_slope_depths: Sequence[int] = (5,),
     flow_levels: Sequence[int] = (1,),
 ) -> None:
     required_columns = required_snapshot_columns(
         micro_price_levels=micro_price_levels,
+        relative_spread_levels=relative_spread_levels,
         oir_depths=oir_depths,
+        book_slope_depths=book_slope_depths,
         flow_levels=flow_levels,
     )
     missing = [column for column in required_columns if column not in schema]
@@ -81,14 +89,18 @@ def validate_snapshot_parquet(
     source_path: Path,
     *,
     micro_price_levels: Sequence[int] = (1,),
+    relative_spread_levels: Sequence[int] = (1,),
     oir_depths: Sequence[int] = (1, 5),
+    book_slope_depths: Sequence[int] = (5,),
     flow_levels: Sequence[int] = (1,),
 ) -> None:
     frame = pl.scan_parquet(str(source_path))
     validate_snapshot_schema(
         frame.collect_schema(),
         micro_price_levels=micro_price_levels,
+        relative_spread_levels=relative_spread_levels,
         oir_depths=oir_depths,
+        book_slope_depths=book_slope_depths,
         flow_levels=flow_levels,
     )
 
@@ -102,6 +114,12 @@ def _book_volume_sum(side: str, depth: int) -> pl.Expr:
         pl.col(f"{side}_volume_{level}").fill_null(0.0) for level in range(1, depth + 1)
     ]
     return pl.sum_horizontal(*volumes)
+
+
+def _mid_price_expr(level: int = 1) -> pl.Expr:
+    bid_price = pl.col(f"bid_price_{level}")
+    ask_price = pl.col(f"ask_price_{level}")
+    return (bid_price + ask_price) / 2.0
 
 
 def _prev_col(name: str) -> str:
@@ -138,6 +156,18 @@ def micro_price_expr(level: int = 1) -> pl.Expr:
     )
 
 
+def relative_spread_expr(level: int = 1) -> pl.Expr:
+    bid_price = pl.col(f"bid_price_{level}")
+    ask_price = pl.col(f"ask_price_{level}")
+    mid_price = _mid_price_expr(level)
+    return (
+        pl.when(_best_quote_is_valid(level) & (mid_price > 0))
+        .then((ask_price - bid_price) / mid_price)
+        .otherwise(None)
+        .alias(f"relative_spread_{level}")
+    )
+
+
 def oir_expr(depth: int = 1) -> pl.Expr:
     bid_volume = _book_volume_sum("bid", depth)
     ask_volume = _book_volume_sum("ask", depth)
@@ -145,6 +175,39 @@ def oir_expr(depth: int = 1) -> pl.Expr:
         bid_volume - ask_volume,
         bid_volume + ask_volume,
     ).alias(f"oir_{depth}")
+
+
+def _book_pressure_sum(side: str, depth: int) -> pl.Expr:
+    mid_price = _mid_price_expr(1)
+    terms: list[pl.Expr] = []
+    for level in range(1, depth + 1):
+        price = pl.col(f"{side}_price_{level}")
+        volume = pl.col(f"{side}_volume_{level}")
+        distance = (
+            mid_price - price if side == "bid" else price - mid_price
+        ).cast(pl.Float64, strict=False)
+        terms.append(
+            pl.when(
+                price.is_not_null()
+                & volume.is_not_null()
+                & (volume > 0)
+                & (distance > 0)
+            )
+            .then(volume / distance)
+            .otherwise(0.0)
+        )
+    return pl.sum_horizontal(*terms)
+
+
+def book_slope_expr(depth: int = 5) -> pl.Expr:
+    bid_pressure = _book_pressure_sum("bid", depth)
+    ask_pressure = _book_pressure_sum("ask", depth)
+    return (
+        pl.when(_best_quote_is_valid(1))
+        .then(_safe_divide(bid_pressure - ask_pressure, bid_pressure + ask_pressure))
+        .otherwise(None)
+        .alias(f"book_slope_{depth}")
+    )
 
 
 def voi_expr(level: int = 1) -> pl.Expr:
@@ -218,7 +281,9 @@ def with_snapshot_factors(
     frame: pl.LazyFrame,
     *,
     micro_price_levels: Sequence[int] = (1,),
+    relative_spread_levels: Sequence[int] = (1,),
     oir_depths: Sequence[int] = (1, 5),
+    book_slope_depths: Sequence[int] = (5,),
     flow_levels: Sequence[int] = (1,),
 ) -> pl.LazyFrame:
     lag_levels = sorted(set(flow_levels))
@@ -230,7 +295,11 @@ def with_snapshot_factors(
     )]
 
     factor_exprs = [micro_price_expr(level) for level in micro_price_levels]
+    factor_exprs.extend(
+        relative_spread_expr(level) for level in relative_spread_levels
+    )
     factor_exprs.extend(oir_expr(depth) for depth in oir_depths)
+    factor_exprs.extend(book_slope_expr(depth) for depth in book_slope_depths)
     factor_exprs.extend(voi_expr(level) for level in flow_levels)
     factor_exprs.extend(ofi_expr(level) for level in flow_levels)
 
@@ -264,7 +333,9 @@ def compute_snapshot_factors_to_parquet(
     output_path: Path,
     *,
     micro_price_levels: Sequence[int] = (1,),
+    relative_spread_levels: Sequence[int] = (1,),
     oir_depths: Sequence[int] = (1, 5),
+    book_slope_depths: Sequence[int] = (5,),
     flow_levels: Sequence[int] = (1,),
     force: bool = False,
 ) -> Path:
@@ -274,14 +345,18 @@ def compute_snapshot_factors_to_parquet(
     validate_snapshot_parquet(
         source_path,
         micro_price_levels=micro_price_levels,
+        relative_spread_levels=relative_spread_levels,
         oir_depths=oir_depths,
+        book_slope_depths=book_slope_depths,
         flow_levels=flow_levels,
     )
     frame = pl.scan_parquet(str(source_path))
     factor_frame = with_snapshot_factors(
         frame,
         micro_price_levels=micro_price_levels,
+        relative_spread_levels=relative_spread_levels,
         oir_depths=oir_depths,
+        book_slope_depths=book_slope_depths,
         flow_levels=flow_levels,
     )
     _sink_parquet_compat(factor_frame, output_path)
