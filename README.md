@@ -36,6 +36,7 @@ The code is split so each layer has one job:
 - [`src/l2_project/robustness.py`](/Users/tong/L2_Project/src/l2_project/robustness.py): summarize session-level and month-session stability
 - [`src/l2_project/grouping.py`](/Users/tong/L2_Project/src/l2_project/grouping.py): test cross-sectional quantile monotonicity and top-minus-bottom spreads
 - [`src/l2_project/redundancy.py`](/Users/tong/L2_Project/src/l2_project/redundancy.py): diagnose factor overlap from cross-sectional correlation and IC-series correlation
+- [`src/l2_project/figures.py`](/Users/tong/L2_Project/src/l2_project/figures.py): render reproducible presentation figures for README and project reviews
 
 ## Factors
 
@@ -154,6 +155,8 @@ Factor effectiveness in the current run:
 - `oir_5` and `ofi_1` remain positive, but are now treated as supplementary factors rather than headline factors
 - `micro_price_1` is negative in this sample and is retained as a control rather than a core factor
 
+![Core Factor Rank IC](artifacts/figures/core_factor_rank_ic.png)
+
 One important point: the biggest improvement after rebuilding the universe was not factor mean IC itself. It was cross-sectional validity. In the earlier mixed-quality universe, many timestamps failed the minimum cross-section requirement. In the current 40-stock universe, most factors are computable at virtually every timestamp.
 
 Diagnostics and robustness now make that claim explicit instead of rhetorical:
@@ -163,6 +166,8 @@ Diagnostics and robustness now make that claim explicit instead of rhetorical:
 - `positive_segment_ratio = 1.0` for both `3000ms` and `30000ms`
 - `VOI` sparsity is still real, but it is now traceable to factor definition instead of universe clock damage
 
+![Factor Coverage and Evaluation Validity](artifacts/figures/factor_coverage_validity.png)
+
 Grouping and redundancy diagnostics are now also part of the selection logic:
 
 - the final headline set is not chosen by rank IC alone
@@ -171,6 +176,10 @@ Grouping and redundancy diagnostics are now also part of the selection logic:
 - `book_slope_5` is preferred over `oir_5` after redundancy diagnostics
 - `ofi_1` is kept as a supplementary event-flow factor because it overlaps too much with `voi_1` in the current sample
 - `micro_price_1` remains a control factor, not a headline signal
+
+![Core Factor Quantile Monotonicity](artifacts/figures/core_factor_monotonicity.png)
+
+![Factor Redundancy Heatmap](artifacts/figures/factor_redundancy_heatmap.png)
 
 ## Reproducibility
 
@@ -192,6 +201,7 @@ python scripts/run_diagnostics.py --force
 python scripts/run_robustness.py --force
 python scripts/run_grouping.py --force
 python scripts/run_redundancy.py --force
+python scripts/run_figures.py
 ```
 
 Run the smoke tests:
