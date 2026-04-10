@@ -34,6 +34,8 @@ The code is split so each layer has one job:
 - [`src/l2_project/eval.py`](/Users/tong/L2_Project/src/l2_project/eval.py): compute Rank IC timeseries, summary, monthly summary, and threshold scans
 - [`src/l2_project/diagnostics.py`](/Users/tong/L2_Project/src/l2_project/diagnostics.py): measure factor coverage, invalid reasons, and symbol-level sparsity
 - [`src/l2_project/robustness.py`](/Users/tong/L2_Project/src/l2_project/robustness.py): summarize session-level and month-session stability
+- [`src/l2_project/grouping.py`](/Users/tong/L2_Project/src/l2_project/grouping.py): test cross-sectional quantile monotonicity and top-minus-bottom spreads
+- [`src/l2_project/redundancy.py`](/Users/tong/L2_Project/src/l2_project/redundancy.py): diagnose factor overlap from cross-sectional correlation and IC-series correlation
 
 ## Factors
 
@@ -58,8 +60,8 @@ Implementation details worth noting:
 
 Current presentation split:
 
-- core factors: `oir_1`, `book_slope_5`, `oir_5`, `ofi_1`, `trade_imbalance_3s`, `voi_1`
-- supplementary or control factors: `relative_spread_1`, `micro_price_1`
+- core factors: `oir_1`, `book_slope_5`, `trade_imbalance_3s`, `voi_1`, `relative_spread_1`
+- supplementary or control factors: `oir_5`, `ofi_1`, `micro_price_1`
 
 ## Labels
 
@@ -105,6 +107,14 @@ Key evaluation outputs:
   - [`data/robustness/rank_ic_session_summary.parquet`](/Users/tong/L2_Project/data/robustness/rank_ic_session_summary.parquet)
   - [`data/robustness/rank_ic_month_session_summary.parquet`](/Users/tong/L2_Project/data/robustness/rank_ic_month_session_summary.parquet)
   - [`data/robustness/rank_ic_stability_summary.parquet`](/Users/tong/L2_Project/data/robustness/rank_ic_stability_summary.parquet)
+- grouping:
+  - [`data/grouping/group_return_timeseries.parquet`](/Users/tong/L2_Project/data/grouping/group_return_timeseries.parquet)
+  - [`data/grouping/group_return_summary.parquet`](/Users/tong/L2_Project/data/grouping/group_return_summary.parquet)
+  - [`data/grouping/group_monotonicity_summary.parquet`](/Users/tong/L2_Project/data/grouping/group_monotonicity_summary.parquet)
+- redundancy:
+  - [`data/redundancy/factor_corr_summary.parquet`](/Users/tong/L2_Project/data/redundancy/factor_corr_summary.parquet)
+  - [`data/redundancy/ic_corr_summary.parquet`](/Users/tong/L2_Project/data/redundancy/ic_corr_summary.parquet)
+  - [`data/redundancy/factor_redundancy_recommendation.parquet`](/Users/tong/L2_Project/data/redundancy/factor_redundancy_recommendation.parquet)
 
 Main findings from the current run:
 
@@ -141,6 +151,7 @@ Factor effectiveness in the current run:
 - `relative_spread_1` is weakly positive
   - `0.012247` for `3000ms`
   - `0.013812` for `30000ms`
+- `oir_5` and `ofi_1` remain positive, but are now treated as supplementary factors rather than headline factors
 - `micro_price_1` is negative in this sample and is retained as a control rather than a core factor
 
 One important point: the biggest improvement after rebuilding the universe was not factor mean IC itself. It was cross-sectional validity. In the earlier mixed-quality universe, many timestamps failed the minimum cross-section requirement. In the current 40-stock universe, most factors are computable at virtually every timestamp.
@@ -151,6 +162,15 @@ Diagnostics and robustness now make that claim explicit instead of rhetorical:
 - `trade_imbalance_3s` session IC stays positive in both morning and afternoon sessions
 - `positive_segment_ratio = 1.0` for both `3000ms` and `30000ms`
 - `VOI` sparsity is still real, but it is now traceable to factor definition instead of universe clock damage
+
+Grouping and redundancy diagnostics are now also part of the selection logic:
+
+- the final headline set is not chosen by rank IC alone
+- `oir_1`, `book_slope_5`, `trade_imbalance_3s`, and `voi_1` all pass both Rank IC and quantile-group monotonicity checks
+- `relative_spread_1` is kept in the headline set as a weak but distinct liquidity-cost dimension
+- `book_slope_5` is preferred over `oir_5` after redundancy diagnostics
+- `ofi_1` is kept as a supplementary event-flow factor because it overlaps too much with `voi_1` in the current sample
+- `micro_price_1` remains a control factor, not a headline signal
 
 ## Reproducibility
 
@@ -170,6 +190,8 @@ python scripts/run_panel.py --force
 python scripts/run_eval.py --force
 python scripts/run_diagnostics.py --force
 python scripts/run_robustness.py --force
+python scripts/run_grouping.py --force
+python scripts/run_redundancy.py --force
 ```
 
 Run the smoke tests:

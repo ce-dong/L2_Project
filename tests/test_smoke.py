@@ -25,6 +25,17 @@ from l2_project.robustness import (
     build_rank_ic_stability_summary,
     build_session_rank_ic_summary,
 )
+from l2_project.grouping import (
+    build_group_monotonicity_summary,
+    build_group_return_summary,
+    build_group_return_timeseries,
+)
+from l2_project.redundancy import (
+    build_cross_section_factor_corr_summary,
+    build_cross_section_factor_corr_timeseries,
+    build_ic_corr_summary,
+    build_redundancy_recommendation,
+)
 from l2_project.trade_factors import compute_snapshot_trade_factors_to_parquet
 
 
@@ -330,6 +341,216 @@ class PipelineSmokeTest(unittest.TestCase):
         self.assertEqual(stability_row["months_observed"], 2)
         self.assertEqual(stability_row["sessions_observed"], 2)
         self.assertAlmostEqual(stability_row["segment_ic_range"], 0.3, places=12)
+
+    def test_grouping_reports_capture_monotonic_cross_section(self) -> None:
+        panel = pl.DataFrame(
+            {
+                "trading_day": [20251103] * 12,
+                "event_time": [93000000] * 6 + [93003000] * 6,
+                "symbol": [
+                    "000001",
+                    "000002",
+                    "000003",
+                    "000004",
+                    "000005",
+                    "000006",
+                    "000001",
+                    "000002",
+                    "000003",
+                    "000004",
+                    "000005",
+                    "000006",
+                ],
+                "source_month": ["202511"] * 12,
+                "oir_1": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0] * 2,
+                "fwd_ret_3000ms": [
+                    0.01,
+                    0.02,
+                    0.03,
+                    0.04,
+                    0.05,
+                    0.06,
+                    0.015,
+                    0.025,
+                    0.035,
+                    0.045,
+                    0.055,
+                    0.065,
+                ],
+            }
+        ).lazy()
+
+        timeseries = build_group_return_timeseries(
+            panel,
+            factor_columns=["oir_1"],
+            label_columns=["fwd_ret_3000ms"],
+            min_cross_section=3,
+            num_groups=3,
+        ).collect()
+        summary = build_group_return_summary(timeseries.lazy()).collect()
+        monotonicity = build_group_monotonicity_summary(
+            timeseries.lazy(),
+            summary=summary.lazy(),
+        ).collect()
+
+        self.assertEqual(timeseries.shape[0], 6)
+        first_bucket = timeseries.filter(pl.col("event_time") == 93000000).sort("group_id")
+        self.assertEqual(first_bucket["group_n_obs"].to_list(), [2, 2, 2])
+        self.assertEqual(first_bucket["group_id"].to_list(), [1, 2, 3])
+        self.assertAlmostEqual(
+            first_bucket.filter(pl.col("group_id") == 1)["group_mean_ret"].item(),
+            0.015,
+            places=12,
+        )
+        self.assertAlmostEqual(
+            first_bucket.filter(pl.col("group_id") == 3)["group_mean_ret"].item(),
+            0.055,
+            places=12,
+        )
+
+        top_group = summary.filter(pl.col("group_id") == 3).row(0, named=True)
+        self.assertAlmostEqual(top_group["mean_ret"], 0.0575, places=12)
+
+        monotonic_row = monotonicity.row(0, named=True)
+        self.assertTrue(monotonic_row["is_monotonic_non_decreasing"])
+        self.assertTrue(monotonic_row["has_complete_group_grid"])
+        self.assertEqual(monotonic_row["top_bottom_spread_sign"], "positive")
+        self.assertAlmostEqual(monotonic_row["positive_spread_ratio"], 1.0, places=12)
+
+    def test_redundancy_reports_identify_highly_overlapping_factors(self) -> None:
+        panel = pl.DataFrame(
+            {
+                "trading_day": [20251103] * 12,
+                "event_time": [93000000] * 6 + [93003000] * 6,
+                "symbol": [
+                    "000001",
+                    "000002",
+                    "000003",
+                    "000004",
+                    "000005",
+                    "000006",
+                    "000001",
+                    "000002",
+                    "000003",
+                    "000004",
+                    "000005",
+                    "000006",
+                ],
+                "source_month": ["202511"] * 12,
+                "oir_1": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0] * 2,
+                "oir_5": [2.0, 4.0, 6.0, 8.0, 10.0, 12.0] * 2,
+                "trade_imbalance_3s": [6.0, 1.0, 4.0, 2.0, 5.0, 3.0] * 2,
+                "fwd_ret_3000ms": [
+                    0.01,
+                    0.02,
+                    0.03,
+                    0.04,
+                    0.05,
+                    0.06,
+                    0.015,
+                    0.025,
+                    0.035,
+                    0.045,
+                    0.055,
+                    0.065,
+                ],
+                "fwd_ret_30000ms": [
+                    0.005,
+                    0.015,
+                    0.025,
+                    0.035,
+                    0.045,
+                    0.055,
+                    0.006,
+                    0.016,
+                    0.026,
+                    0.036,
+                    0.046,
+                    0.056,
+                ],
+            }
+        ).lazy()
+
+        factor_corr_timeseries = build_cross_section_factor_corr_timeseries(
+            panel,
+            factor_columns=["oir_1", "oir_5", "trade_imbalance_3s"],
+            min_cross_section=3,
+        )
+        factor_corr_summary = build_cross_section_factor_corr_summary(
+            factor_corr_timeseries
+        ).collect()
+
+        rank_ic_timeseries = pl.DataFrame(
+            {
+                "trading_day": [20251103, 20251103, 20251203, 20251203],
+                "event_time": [93000000, 130000000, 93000000, 130000000],
+                "rank_ic__oir_1__fwd_ret_3000ms": [0.20, 0.15, 0.25, 0.10],
+                "rank_ic__oir_5__fwd_ret_3000ms": [0.19, 0.14, 0.24, 0.09],
+                "rank_ic__trade_imbalance_3s__fwd_ret_3000ms": [0.05, -0.02, 0.01, 0.03],
+                "rank_ic__oir_1__fwd_ret_30000ms": [0.10, 0.08, 0.11, 0.07],
+                "rank_ic__oir_5__fwd_ret_30000ms": [0.09, 0.07, 0.10, 0.06],
+                "rank_ic__trade_imbalance_3s__fwd_ret_30000ms": [0.03, 0.02, -0.01, 0.01],
+            }
+        ).lazy()
+        ic_corr_summary = build_ic_corr_summary(
+            rank_ic_timeseries,
+            factor_columns=["oir_1", "oir_5", "trade_imbalance_3s"],
+            label_columns=["fwd_ret_3000ms", "fwd_ret_30000ms"],
+        ).collect()
+
+        rank_ic_summary = pl.DataFrame(
+            {
+                "factor": [
+                    "oir_1",
+                    "oir_1",
+                    "oir_5",
+                    "oir_5",
+                    "trade_imbalance_3s",
+                    "trade_imbalance_3s",
+                ],
+                "label": [
+                    "fwd_ret_3000ms",
+                    "fwd_ret_30000ms",
+                    "fwd_ret_3000ms",
+                    "fwd_ret_30000ms",
+                    "fwd_ret_3000ms",
+                    "fwd_ret_30000ms",
+                ],
+                "rank_ic_mean": [0.20, 0.10, 0.11, 0.06, 0.05, 0.03],
+                "valid_ratio": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            }
+        ).lazy()
+        recommendation = build_redundancy_recommendation(
+            factor_corr_summary.lazy(),
+            ic_corr_summary.lazy(),
+            rank_ic_summary,
+        ).collect()
+
+        oir_pair = factor_corr_summary.filter(
+            (pl.col("factor_left") == "oir_1") & (pl.col("factor_right") == "oir_5")
+        ).row(0, named=True)
+        self.assertAlmostEqual(oir_pair["factor_corr_mean"], 1.0, places=12)
+        self.assertAlmostEqual(oir_pair["factor_corr_abs_mean"], 1.0, places=12)
+
+        oir_ic_pair = ic_corr_summary.filter(
+            (pl.col("factor_left") == "oir_1")
+            & (pl.col("factor_right") == "oir_5")
+            & (pl.col("label") == "fwd_ret_3000ms")
+        ).row(0, named=True)
+        self.assertGreater(oir_ic_pair["ic_corr"], 0.99)
+
+        redundant_row = recommendation.filter(
+            (pl.col("factor_left") == "oir_1") & (pl.col("factor_right") == "oir_5")
+        ).row(0, named=True)
+        self.assertTrue(redundant_row["likely_redundant"])
+        self.assertEqual(redundant_row["recommended_keep"], "oir_1")
+
+        distinct_row = recommendation.filter(
+            (pl.col("factor_left") == "oir_1")
+            & (pl.col("factor_right") == "trade_imbalance_3s")
+        ).row(0, named=True)
+        self.assertFalse(distinct_row["likely_redundant"])
+        self.assertEqual(distinct_row["recommended_keep"], "keep_both")
 
 
 if __name__ == "__main__":
